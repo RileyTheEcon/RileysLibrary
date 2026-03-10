@@ -200,6 +200,16 @@ def retry_on_error(
 def make_dir (strDir) :
     Path(strDir).mkdir(parents=True,exist_ok=True)
 ####
+def updateLibrary () :
+    import sys, subprocess
+    subprocess.run([
+        sys.executable, 
+        "-m", "pip", "install", 
+        "--force-reinstall", 
+        "--no-cache-dir",
+        "git+https://github.com/RileyTheEcon/RileysLibrary.git"
+        ])
+####
 def Michel_date () :
     ''' Return today's date as Month Day Year str with spaces between entries
     '''
