@@ -18,6 +18,7 @@ Created on Wed Nov  3 12:08:42 2021
 
 
 # Meta data handling
+import threading
 import functools
 import json
 from pathlib import Path
@@ -88,43 +89,114 @@ dictColor = {'VGood'    :'#115F4F',
 
 
 
-# ================================ FUNCTIONS ================================ #
-def run_at_time(
+# =============================== DECORATORS ================================ #
+def scheduleRun(
         hour=22, 
         minute=0, 
         weekdays_only=True,
-        now=True
+        runNow=True
         ):
     def decorator(func):
+        # Set escape parameter
+        stopEvent = threading.Event()
+        
+        # Define scheduling wrapper
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
-            if now :
-                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running immediately (now=True)...")
-                func(*args, **kwargs)
+            if runNow :
+                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running immediately (runNow=True)...")
+                try:
+                    func(*args, **kwargs)
+                except Exception as e:
+                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
             
-            while True:
-                now_dt = datetime.now()
-                target = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            while not stopEvent.isSet() :
+                dtCurrent = datetime.now()
+                target = dtCurrent.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
                 # If current time is past today's target, move to next day
-                if now_dt >= target:
+                if dtCurrent >= target:
                     target += timedelta(days=1)
+                #   end if
 
                 # If weekdays_only, skip weekends
                 if weekdays_only:
                     while target.weekday() >= 5:
                         target += timedelta(days=1)
+                #   end if
+                
+                # Get sleep duration
+                sleep_seconds = (target - dtCurrent).total_seconds()
+                print(f"[{dtCurrent:%Y-%m-%d %H:%M:%S}] Next run at {target:%Y-%m-%d %H:%M:%S}")
 
-                sleep_seconds = (target - now_dt).total_seconds()
-                print(f"[{now_dt:%Y-%m-%d %H:%M:%S}] Sleeping {sleep_seconds/60:.1f} minutes until next run at {target}")
-                sleep(sleep_seconds)
+                # Sleep in interval to allow for interrupt
+                interval = 60
+                while sleep_seconds > 0 and not stopEvent.is_set():
+                    sleep(min(interval, sleep_seconds))
+                    sleep_seconds -= interval
 
+                # Check for interrupt to sleep
+                if stopEvent.is_set():
+                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Scheduler stopped.")
+                    break
+                #   end if
+                
+                # Run function; Restart loop
                 print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running function...")
-                func(*args, **kwargs)
+                try:
+                    func(*args, **kwargs)
+                except Exception as e:
+                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
+                #   end try/except
+            #   end while
         return wrapper
     #   end decorator-wrapper
     return decorator
 ####
+def retry_on_error(
+        error_types, 
+        max_retries=3, 
+        delay=30
+        ):
+    """
+    Decorator that retries a function if it raises a specified error.
+    
+    Parameters
+    ----------
+    error_types : Exception or tuple of Exception
+        The exception(s) that should trigger a retry.
+    max_retries : int, optional
+        Maximum number of retries before giving up (default: 3).
+    delay : int or float, optional
+        Delay in seconds between retries (default: 5).
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except error_types as e:
+                    if attempt < max_retries:
+                        print(f"Attempt {attempt} failed with {e}. Retrying in {delay}s...")
+                        sleep(delay)
+                    else:
+                        print(f"Attempt {attempt} failed with {e}. No retries left.")
+                        raise
+                except Exception as e:
+                    # Any other error should stop the script
+                    print(f"Unexpected error: {e}")
+                    raise
+        return wrapper
+    return decorator
+####
+# =========================================================================== #
+
+
+
+
+
+# ================================ FUNCTIONS ================================ #
 def make_dir (strDir) :
     Path(strDir).mkdir(parents=True,exist_ok=True)
 ####
