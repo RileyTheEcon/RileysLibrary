@@ -94,7 +94,8 @@ def scheduleRun(
         hour=22, 
         minute=0, 
         weekdays_only=True,
-        runNow=True
+        runNow=True,
+        log = None
         ):
     def decorator(func):
         # Set escape parameter
@@ -104,11 +105,27 @@ def scheduleRun(
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             if runNow :
-                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running immediately (runNow=True)...")
+                if not log :
+                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running immediately (runNow=True)...")
+                else :
+                    log.logging.info(
+                        f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                        'Running immediately (runNow=True)...'
+                        )
+                    
                 try:
                     func(*args, **kwargs)
                 except Exception as e:
-                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
+                    if not log :
+                        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
+                    else :
+                        log.logging.info(
+                            f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                            f'Error: {e}'
+                            )
+                    #   end if
+                #   end try/except
+            #   end if runNow
             
             while not stopEvent.isSet() :
                 dtCurrent = datetime.now()
@@ -127,7 +144,14 @@ def scheduleRun(
                 
                 # Get sleep duration
                 sleep_seconds = (target - dtCurrent).total_seconds()
-                print(f"[{dtCurrent:%Y-%m-%d %H:%M:%S}] Next run at {target:%Y-%m-%d %H:%M:%S}")
+                if not log :
+                    print(f"[{dtCurrent:%Y-%m-%d %H:%M:%S}] Next run at {target:%Y-%m-%d %H:%M:%S}"
+                          )
+                else :
+                    log.logging.info(
+                        f'[{datetime.now():%Y-%m-%d %H:%M:%S}] Next run at {target:%Y-%m-%d %H:%M:%S}'
+                        )
+                #   end if
 
                 # Sleep in interval to allow for interrupt
                 interval = 60
@@ -137,16 +161,36 @@ def scheduleRun(
 
                 # Check for interrupt to sleep
                 if stopEvent.is_set():
-                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Scheduler stopped.")
-                    break
+                    if not log :
+                        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Scheduler stopped.")
+                    else :
+                        log.logging.info(
+                            f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                            'Scheduler stopped.'
+                            )
+                    #   end if
+                    break # keyboard interrupt
                 #   end if
                 
                 # Run function; Restart loop
-                print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running function...")
+                if not log :
+                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Running function...")
+                else :
+                    log.logging.info(
+                        f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                        'Scheduler stopped.'
+                        )
+                #   end if
                 try:
                     func(*args, **kwargs)
                 except Exception as e:
-                    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
+                    if not log :
+                        print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] Error: {e}")
+                    else :
+                        log.logging.info(
+                            f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                            f'Error: {e}"'
+                            )
                 #   end try/except
             #   end while
         return wrapper
@@ -156,7 +200,8 @@ def scheduleRun(
 def retry_on_error(
         error_types, 
         max_retries=3, 
-        delay=30
+        delay=30,
+        log=None
         ):
     """
     Decorator that retries a function if it raises a specified error.
@@ -178,16 +223,48 @@ def retry_on_error(
                     return func(*args, **kwargs)
                 except error_types as e:
                     if attempt < max_retries:
-                        print(f"Attempt {attempt} failed with {e}. Retrying in {delay}s...")
+                        if not log :
+                            print(f"Attempt {attempt} failed with {e}. "+
+                                  f"Retrying in {delay}s..."
+                                  )
+                        else :
+                            log.logging.info(
+                                f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                                f"Attempt {attempt} failed with {e}. "+
+                                f"Retrying in {delay}s..."
+                                )
+                        #   end if
                         sleep(delay)
                     else:
-                        print(f"Attempt {attempt} failed with {e}. No retries left.")
+                        if not log :
+                            print(f"Attempt {attempt} failed with {e}. "+
+                                  "No retries left."
+                                  )
+                        else :
+                            log.logging.info(
+                                f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                                f"Attempt {attempt} failed with {e}. "+
+                                "No retries left."
+                                )
+                        #   end if
                         raise
+                    #   end if attempt < max_retries
                 except Exception as e:
                     # Any other error should stop the script
-                    print(f"Unexpected error: {e}")
+                    if not log :
+                        print(f"Unexpected error: {e}")
+                    else :
+                        log.logging.info(
+                            f'[{datetime.now():%Y-%m-%d %H:%M:%S}] '+
+                            f"Unexpected error: {e}"
+                            )
+                    #   end if
                     raise
+                #   end try/except
+            #   end for
+        #   end def
         return wrapper
+    #   end def
     return decorator
 ####
 # =========================================================================== #
