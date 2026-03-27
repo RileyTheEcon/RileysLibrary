@@ -277,26 +277,22 @@ def persistCache(filePath=None):
         # Create cache in memory
         cache = {}
         
-        # If import/export directory is given...
         if filePath is not None:
-            import atexit # needed for export
-            
-            # Check for existing cache
             resolvedPath = Path(filePath)
             resolvedPath.parent.mkdir(parents=True, exist_ok=True)
             try:
-                with open(resolvedPath, 'r') as f:
-                    cache = json.load(f)
+                with open(resolvedPath, 'r') as f: cache = json.load(f)
             except (FileNotFoundError, json.JSONDecodeError):
                 cache = {}
             #   end try/except
-    
-            # Register save-on-exit
-            def saveCache():
-                with open(resolvedPath, 'w') as f : json.dump(cache, f)
-            atexit.register(saveCache)
-        #   end if -- import/export
-    
+        #   end if
+
+        def saveCache():
+            if filePath is not None:
+                with open(resolvedPath, 'w') as f: json.dump(cache, f)
+            #   end if
+        #   end def
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             key = str((func.__name__, args, tuple(sorted(kwargs.items()))))
@@ -305,8 +301,11 @@ def persistCache(filePath=None):
             result = func(*args, **kwargs)
             cache[key] = result
             return result
-    
+        #   end def
+
+        wrapper.saveCache = saveCache  # expose for manual call
         return wrapper
+
     return decorator
 ####
 # =========================================================================== #
