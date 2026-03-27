@@ -10,12 +10,6 @@ Created on Wed Nov  3 12:08:42 2021
 
 
 # ================================ LIBRARIES ================================ #
-# import sys
-# if sys.prefix[sys.prefix.rindex('\\')+1:] == 'geoSpyder' :
-#     sys.path.append('C:\\Users\\conlon\\Anaconda3\\Lib')
-# #   endif
-
-
 
 # Meta data handling
 import threading
@@ -197,7 +191,7 @@ def scheduleRun(
     #   end decorator-wrapper
     return decorator
 ####
-def retry_on_error(
+def retryOnError(
         error_types, 
         max_retries=3, 
         delay=30,
@@ -267,6 +261,54 @@ def retry_on_error(
     #   end def
     return decorator
 ####
+def persistCache(filePath=None):
+    '''
+    Decorator that caches function calls and returns cached result when
+    arguments are recognized.
+    Decorator checks for existing cache
+
+    Parameters
+    ----------
+    filePath : str, optional
+        Define directory and file name for import and exporting cache. 
+        The default is None.
+    '''
+    def decorator(func):
+        # Create cache in memory
+        cache = {}
+        
+        # If import/export directory is given...
+        if filePath is not None:
+            import atexit # needed for export
+            
+            # Check for existing cache
+            resolvedPath = Path(filePath)
+            resolvedPath.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with open(resolvedPath, 'r') as f:
+                    cache = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                cache = {}
+            #   end try/except
+    
+            # Register save-on-exit
+            def saveCache():
+                with open(resolvedPath, 'w') as f : json.dump(cache, f)
+            atexit.register(saveCache)
+        #   end if -- import/export
+    
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            key = str((func.__name__, args, tuple(sorted(kwargs.items()))))
+            if key in cache:
+                return cache[key]
+            result = func(*args, **kwargs)
+            cache[key] = result
+            return result
+    
+        return wrapper
+    return decorator
+####
 # =========================================================================== #
 
 
@@ -276,6 +318,53 @@ def retry_on_error(
 # ================================ FUNCTIONS ================================ #
 def make_dir (strDir) :
     Path(strDir).mkdir(parents=True,exist_ok=True)
+####
+def createLog (
+        directory   = '/log',
+        name        = 'today'
+        ) :
+    ''' Create directory for console log and returns logging object.
+        Default to '/log' in current folder, and named for current date,
+        YYYY-MM-DD.txt
+        
+        Example use:
+            logObj = createLog()
+            logObj.logging.info(
+                f'[{pd.Timestamp("today"):%Y-%m-%d %H:%M:%S}] '+
+                'Hello World!'
+                )
+        #   end example
+    '''
+    #   Get dependents
+    import logging
+    import Path
+    import pandas as pd
+    
+    #   Create location
+    Path(directory).mkdir(parents=True,exist_ok=True)
+    
+    #   Get .txt name
+    if name=='today' : name = f'{pd.Timestamp("today"):%Y-%m-%d %H_%M}'
+    
+    #   Set parameters for file
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[
+            logging.FileHandler(
+                directory+name+'.txt'),
+            logging.StreamHandler()  # also prints to console
+        ]
+    )
+
+    #   Return logging object (now use )
+    return logging.getLogger()
+####
+def enableGeoPandas () :
+    import sys
+    if sys.prefix[sys.prefix.rindex('\\')+1:] == 'geoSpyder' :
+        sys.path.append('C:\\Users\\conlon\\Anaconda3\\Lib')
+    #   endif
 ####
 def updateLibrary () :
     import sys, subprocess
