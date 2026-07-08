@@ -12,17 +12,16 @@ Created on Wed Nov  3 12:08:42 2021
 # ================================ LIBRARIES ================================ #
 
 # Meta data handling
+import os
 import threading
 import functools
 import json
 from pathlib import Path
 
 # Data & Math
-from math import floor, log10
-from pandas  import (DataFrame, DatetimeIndex, ExcelWriter, to_datetime, concat,
-                     ExcelFile, Index, isna, read_csv, Timestamp) #, read_excel
-from numpy import append, ones, sqrt, dot, linalg, arange, histogram, std, nan, var
-from numpy import round as np_round
+import math
+import numpy as np
+import pandas as pd
 from statsmodels.api import OLS, add_constant
 
 # APIs
@@ -51,10 +50,13 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 
-
-#key = 'b64ae6cb0dcb2f2886450659ab3ddf52'
-key = '508c61702404b2ea11e4712ce96cd751'
+try : 
+    with open("fred_api_key.txt", "r") as f: 
+        key = f.read().strip()
+except :
+    key = input('FRED api key?: ')
 fred = Fred(key)
+
 
 dictColor = {'VGood'    :'#115F4F',
              'Good'     :'#42B09D',
@@ -314,73 +316,290 @@ def persistCache(filePath=None):
 
 
 
-# ================================ FUNCTIONS ================================ #
-def make_dir (strDir) :
-    Path(strDir).mkdir(parents=True,exist_ok=True)
-####
-def createLog (
-        directory   = '/log',
-        name        = 'today'
-        ) :
-    ''' Create directory for console log and returns logging object.
-        Default to '/log' in current folder, and named for current date,
-        YYYY-MM-DD.txt
+# ================================ CLASS-OBJ ================================ #
+class logger :
+    def __init__ (
+            self,
+            writeTo = 'log/'
+            ) :
+        # Import library
+        import logging
         
-        Example use:
-            logObj = createLog()
-            logObj.logging.info(
-                f'[{pd.Timestamp("today"):%Y-%m-%d %H:%M:%S}] '+
-                'Hello World!'
+        # Make logging dir if it doesn't already exist
+        Path(writeTo).mkdir(parents=True,exist_ok=True)
+        
+        # Establish basic log config regular memory dumps
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(message)s",
+            handlers=[
+                logging.FileHandler(
+                    f'{writeTo}{pd.Timestamp("today"):%Y-%m-%d %H_%M}.txt'),
+                logging.StreamHandler()  # also prints to console
+            ]
+        )
+        
+        # Create logging object
+        self.log = logging.getLogger()
+        
+    #   end __init__
+    #
+    def print(self, *args, sep=' '):
+        # Print text to user, save to log, dump memory
+        message = sep.join(str(a) for a in args)
+        self.log.info(
+            f'[{pd.Timestamp("today"):%Y-%m-%d %H:%M:%S}] ' + message
+        )
+    #   end print
+    #
+#   end logger
+####
+class CannedSoup :
+    
+    def __init__ (self, **kwargs) :
+        # Import dependents
+        
+        
+        # Attach arguments as methods
+        self.__attach_args(kwargs)
+        
+    #	end init
+    
+    
+    
+    def __attach_args (self, kwargs) :
+        if 'url' in kwargs: self.url = kwargs['url']
+        elif not hasattr(self, 'url'):
+            raise ValueError("url must be provided")
+        #   end if
+        
+        self.timeout = kwargs.get(
+            'timeout', 
+            getattr(self, 'timeout', 10)
+            ) # seconds
+        
+        self.verbose = kwargs.get(
+            'verbose', 
+            getattr(self, 'verbose', True)
+            ) # message to user
+        
+        
+        self.header = kwargs.get(
+            'header',
+            getattr(self, 'header',
+                    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                     "Accept-Language": "en-US,en;q=0.9",
+                     "Accept": "text/html,application/xhtml+xml",
+                     "Referer": "https://www.google.com/"
+                    }
                 )
-        #   end example
-    '''
-    #   Get dependents
-    import logging
-    import Path
-    import pandas as pd
+            ) # header info for attempt 2
+        
+        
+        self.retries = kwargs.get(
+            'retries',
+            getattr(self, 'retries', 3)
+            ) # number of retries on failed request
+        
+        self.baseDelay = kwargs.get(
+            'baseDelay',
+            getattr(self, 'baseDelay', 5)
+            ) # number of retries on failed request
+        
+    #	end __attach_args
     
-    #   Create location
-    Path(directory).mkdir(parents=True,exist_ok=True)
     
-    #   Get .txt name
-    if name=='today' : name = f'{pd.Timestamp("today"):%Y-%m-%d %H_%M}'
+    def _attempt_request (
+        self,
+        getFn, # function to be attempted
+        ) :
+        '''
+        getFn : Callable that returns a requests.Response
+        '''
+        # Import dependents
+        import time
+        import requests
+        
+        # Attempt functions
+        for attempt in range(self.retries + 1) : 
+            try :
+                response = getFn()
+                status   = self.__classify_response(response)
+                
+                if status == 'ok' : return response.text
+                
+                elif status == 'blocked' : 
+                    raise PermissionError(f'Blocked ({response.status_code})')
+                    
+                
+                elif status in ['rate_limited', 'server_error'] :
+                    if attempt < self.retries :
+                        delay = self.baseDelay * (2 ** attempt)
+                        if self.verbose :
+                            print(f"Retryable error ({response.status_code}), sleeping {delay}s")
+                        #   end if
+                        time.sleep(delay)
+                        continue
+                    else : 
+                        raise Exception(f'Retries exhausted ({response.status_code})')
+                    #   end if
+                
+                else : 
+                    raise Exception(f'Unhandled status: {response.status_code}')
+            
+            except requests.exceptions.RequestException as e :
+                # Network issues => Treat as transient
+                if attempt < self.retries :
+                    delay = self.baseDelay * (2 ** attempt)
+                    if self.verbose :
+                        print(f'Network error, retrying in {delay}s: {e}')
+                    time.sleep(delay)
+                #   end if
+                
+            #   end try/except
+            
+        #   end for attempt
+        # raise Exception('Unreachable')
+        
+    #	end _attempt_request
     
-    #   Set parameters for file
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-        handlers=[
-            logging.FileHandler(
-                directory+name+'.txt'),
-            logging.StreamHandler()  # also prints to console
-        ]
-    )
 
-    #   Return logging object (now use )
-    return logging.getLogger()
+    def __classify_response (
+            self,
+            response
+            ) :
+        code = response.status_code
+	
+        if code==200 : return 'ok'
+        elif code in [401, 403] : return 'blocked'
+        elif code == 429 : return 'rate_limited'
+        elif 500 <= code < 600 : return 'server_error'
+        elif 400 <= code < 500 : return 'client_error'
+        else : return 'unknown'
+	
+	#	end classift response
+
+    
+    def simple_request (self) :
+        import requests
+        
+        return self._attempt_request(
+            lambda : requests.get(self.url, timeout=self.timeout)
+            )
+    #   end simple_request
+    
+    
+    def session_request (self) :
+        import requests
+        
+        session = requests.Session()
+        session.headers.update(self.header)
+        
+        return self._attempt_request(
+            lambda : session.get(
+                self.url, timeout=self.timeout)
+            )
+    #   end session_request
+    
+    
+    def cloud_request (self) :
+        import cloudscraper
+        
+        scraper = cloudscraper.create_scraper()
+        
+        return self._attempt_request(
+            lambda : scraper.get(
+                self.url, timeout=self.timeout)
+            )
+    #   end cloud_request
+    
+    
+    def selenium_request (self) :
+        #import time
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
+        
+        options = Options()
+        options.add_argument('--headless=new')
+        
+        driver = webdriver.Chrome(options=options)
+        driver.get(self.url)
+        time.sleep(5)
+        
+        html = driver.page_source
+        driver.quit()
+        
+        return html
+    #   end selenium_request
+
+
+    def Can (self, **kwargs) :
+        
+        # 1st Attempt: Simple Request
+        try :
+            if self.verbose : print('1st Attempt: Simple Request')
+            self.html = self.simple_request()
+            
+        except PermissionError :
+            if self.verbose : print('Attempt failed, escalating...')
+        # end
+        
+        
+
+		# 2nd Attempt: With Headers + Session
+        try :
+            if self.verbose : print('2nd Attempt: Session & Headers')
+            self.html = self.session_request()
+            
+        except PermissionError :
+            if self.verbose : print('Escalating from Stage 2')
+        # end
+        
+        
+        
+        # 3rd Attempt: cloudscraper
+        try :
+            if self.verbose : print('3rd Attempt: cloudscraper')
+            self.html = self.cloud_request()
+            
+        except PermissionError :
+            if self.verbose : print('Escalating to Stage 4')
+        # end
+        
+
+        
+        # 4th Attempt: Selenium
+        try :
+            if self.verbose : print('4th Attempt: Selenium')
+            self.html = self._attempt_request(
+                self.selenium_request()
+                )
+            
+        except Exception as e :
+            raise Exception(f'Selenium failed: {e}')
+        
+
+        # All Attempts failed
+        raise Exception('All stages failed :(')
+
+	#	end def
+    can = CAN = RUN = Run = run = Can
+	#	end alias
+
 ####
-def enableGeoPandas () :
-    import sys
-    if sys.prefix[sys.prefix.rindex('\\')+1:] == 'geoSpyder' :
-        sys.path.append('C:\\Users\\conlon\\Anaconda3\\Lib')
-    #   endif
-####
-def updateLibrary () :
-    import sys, subprocess
-    subprocess.run([
-        sys.executable, 
-        "-m", "pip", "install", 
-        "--force-reinstall", 
-        "--no-cache-dir",
-        "git+https://github.com/RileyTheEcon/RileysLibrary.git"
-        ])
-####
-def Michel_date () :
+# =========================================================================== #
+
+
+
+
+
+# ================================ FUNCTIONS ================================ #
+def MichelTimestamp () :
     ''' Return today's date as Month Day Year str with spaces between entries
     '''
-    return ('{:02d}'.format(Timestamp.today().month)+' '+
-            '{:02d}'.format(Timestamp.today().day)+' '+
-            '{:02d}'.format(Timestamp.today().year)
+    return ('{:02d}'.format(pd.Timestamp.today().month)+' '+
+            '{:02d}'.format(pd.Timestamp.today().day)+' '+
+            '{:02d}'.format(pd.Timestamp.today().year)
             )
 ####
 def bls_get (dictData={'Name':'seriesID'}) :
@@ -393,9 +612,9 @@ def bls_get (dictData={'Name':'seriesID'}) :
                 headers={'Content-type':'application/json'}
                 )
     dataJSON = json.loads(page.text)
-    dfOut  = DataFrame()
+    dfOut  = pd.DataFrame()
     for dictI in dataJSON['Results']['series'] :
-        df = DataFrame()
+        df = pd.DataFrame()
         strName = list(dictData.keys()
                        )[list(dictData.values()).index(dictI['seriesID'])]
         
@@ -410,7 +629,7 @@ def bls_get (dictData={'Name':'seriesID'}) :
         if len(dfOut)==0 : dfOut = df.copy()
         else : dfOut = dfOut.merge(df,on=['year','month'],how='outer')
     #   endfor
-    dfOut['ts']    = dfOut.apply(lambda x : Timestamp(str(x['year'])+'-'+
+    dfOut['ts']    = dfOut.apply(lambda x : pd.Timestamp(str(x['year'])+'-'+
                                                       str(x['month'])+'-15'
                                                       ),axis=1)
     dfOut = dfOut.set_index('ts')
@@ -426,7 +645,7 @@ def get_data (fred,listFred,try_limit=5) :
     #                                                  (~dfSource['SeriesID'].isna())
     #                                                  ].to_numpy()
     #                    ])
-    dfData = DataFrame()
+    dfData = pd.DataFrame()
     for tpl in listFred :
         bContinue       = 0
         intErrorCount   = 0
@@ -435,7 +654,7 @@ def get_data (fred,listFred,try_limit=5) :
         
         while (bContinue==0)&(intErrorCount<try_limit) : 
             try :
-                data = DataFrame(fred.get_series(tpl[1])
+                data = pd.DataFrame(fred.get_series(tpl[1])
                                  ).rename(columns={0:tpl[0]})
                 data.index.name = 'date'
             except : 
@@ -452,7 +671,7 @@ def get_data (fred,listFred,try_limit=5) :
                                 for x in listRows if x!=''
                                 ]
                     
-                    data = DataFrame(listRows,columns=['index',tpl[0]]
+                    data = pd.DataFrame(listRows,columns=['index',tpl[0]]
                                      ).set_index('index')
                     data.index.name = 'date'
                 except : 
@@ -478,7 +697,13 @@ def get_data (fred,listFred,try_limit=5) :
     #   endfor
     return dfData.sort_index()
 ####
-def gen_dict (dfFred,dictNames={'Name':'Name','seriesID':'seriesID'}) :
+def genVarDictionary (
+        dfFred,
+        dictNames={'Name':'Name','seriesID':'seriesID'}
+        ) :
+    ''' 
+    '''
+    
     # Takes list of tuples, listFred = [col name, seriesID]
     strURL  = 'https://fred.stlouisfed.org/data/'
     strName = dictNames['Name']
@@ -486,7 +711,7 @@ def gen_dict (dfFred,dictNames={'Name':'Name','seriesID':'seriesID'}) :
     
     
     
-    dfOut = DataFrame()
+    dfOut = pd.DataFrame()
     for index,row in dfFred.iterrows() :
         dictRow = {strName  :row[strName],
                    strID    :row[strID]
@@ -563,13 +788,10 @@ def dlURL (url , parser = "html.parser" ) :
 
     return pageSoup
 ####
-def reverse (stri) :
-    x = ""
-    for i in stri :
-        x = i + x
-    return x
-####
-def isolate_better (stri , start , end, b_end = 0) :
+def isolateBetter (stri , start , end, b_end = 0) :
+    ''' ISOLATE-BETTER
+        
+    '''
     strShort    = ''
     posStart    = 0
     posEnd      = 0
@@ -577,8 +799,8 @@ def isolate_better (stri , start , end, b_end = 0) :
     if b_end==1 :
         posEnd      = stri.find(end)
         strShort    = stri[:posEnd]
-        strShort    = reverse(strShort)
-        start       = reverse(start)
+        strShort    = strShort[::-1]
+        start       = start[::-1]
         posStart    = posEnd - strShort.find(start)
     #
     else :
@@ -602,33 +824,6 @@ def dict_to_excel (dictIN,fileName,Index=None) :
                 )
         #   endfor
     #   endwith
-    
-    # # Create a Pandas Excel writer using XlsxWriter as the engine.
-    # writer = pd.ExcelWriter("pandas_column_formats.xlsx", engine='xlsxwriter')
-    
-    # # Convert the dataframe to an XlsxWriter Excel object.
-    # df.to_excel(writer, sheet_name='Sheet1')
-    
-    # # Get the xlsxwriter workbook and worksheet objects.
-    # workbook  = writer.book
-    # worksheet = writer.sheets['Sheet1']
-    
-    # # Add some cell formats.
-    # format1 = workbook.add_format({'num_format': '#,##0.00'})
-    # format2 = workbook.add_format({'num_format': '0%'})
-    
-    # # Note: It isn't possible to format any cells that already have a format such
-    # # as the index or headers or any cells that contain dates or datetimes.
-    
-    # # Set the column width and format.
-    # worksheet.set_column(1, 1, 18, format1)
-    
-    # # Set the format but not the column width.
-    # worksheet.set_column(2, 2, None, format2)
-    
-    # # Close the Pandas Excel writer and output the Excel file.
-    # writer.save()
-    
 ####
 def excel_to_dict (dirFile) :
     
@@ -644,7 +839,7 @@ def Linear_Outreg (inX,inY) :
     # Source: https://stackoverflow.com/questions/27928275/find-p-value-significance-in-scikit-learn-linearregression
     
     X = inX[(inY.notnull())&(~inX.isna().any(axis=1))]
-    inY = DataFrame(inY)
+    inY = pd.DataFrame(inY)
     #y = inY[(~inX.isna().any(axis=1))]
     y = inY.loc[X.index]
     
@@ -657,14 +852,14 @@ def Linear_Outreg (inX,inY) :
     params = append(lm.intercept_,lm.coef_)
     predictions = lm.predict(X)
     
-    newX = DataFrame({"Constant":ones(len(X))}).join(DataFrame(X)).reset_index(drop=True)
+    newX = pd.DataFrame({"Constant":ones(len(X))}).join(pd.DataFrame(X)).reset_index(drop=True)
     SST = sum((y-y.mean())**2)
     RSS = sum((y-predictions)**2)
     MSE = RSS/(len(newX)-len(newX.columns))
     R2  = 1 - (RSS/SST)
     aR2 = 1 - (1-R2)*((len(newX)-1)/(len(newX)-len(newX.columns)))
     
-    # Note if you don't want to use a DataFrame replace the two lines above with
+    # Note if you don't want to use a pd.DataFrame replace the two lines above with
     # newX = np.append(np.ones((len(X),1)), X, axis=1)
     # MSE = (sum((y-predictions)**2))/(len(newX)-len(newX[0]))
     
@@ -683,9 +878,9 @@ def Linear_Outreg (inX,inY) :
     model2 = OLS(y,add_constant(X)).fit()
     
     
-    myDF3 = DataFrame()
+    myDF3 = pd.DataFrame()
     myDF3["Coefficients"],myDF3["Standard Errors"],myDF3["t values"],myDF3["Probabilities"] = [params,sd_b,ts_b,p_values]
-    myDF3 = myDF3.set_index(Index(['Const']+list(DataFrame(inX))))
+    myDF3 = myDF3.set_index(Index(['Const']+list(pd.DataFrame(inX))))
     return {'model':myDF3, 'SSE' : SST[0], 'RSS' : RSS[0], 'MSE' : MSE[0],
             'R2' : R2[0] , 'adj-R2' : aR2[0], 'n' : len(X),
             'f-value' : model2.fvalue , 'f-prob' : model2.f_pvalue
@@ -703,15 +898,15 @@ def month_to_quarter (x) :
     return c
 ####
 def plot_hist (df,min_bins=5,max_bins=35,xts=[],strName='',bSave=False) :
-    rangeNorm = arange(-3.5,3.5,0.001)
+    rangeNorm = np.arange(-3.5,3.5,0.001)
     listBins = list(range(min_bins,max_bins+1))
     listErr = []
     
-    mean,stdv,num = df.mean(),std(df),len(df)
+    mean,stdv,num = df.mean(),np.std(df),len(df)
     
     for n in listBins :
-        dfFit = DataFrame()
-        heights,intervals = histogram(df,bins=n)    
+        dfFit = pd.DataFrame()
+        heights,intervals = pd.histogram(df,bins=n)    
         listX = []
         for i in range(1,len(intervals)) :
             listX.append((intervals[i-1]+intervals[i])/2)
@@ -741,12 +936,25 @@ def b_round (x,i=0) :
 ####
 def sig_fig (x,n) :
     if x>0 : 
-        n = max(n-floor(log10(x))-1,0)
+        n = max(n-math.floor(np.log10(x))-1,0)
         x = b_round(x,n)
-    else : x=nan
+    else : x=np.nan
     return x
 ####
+# =========================================================================== #
+
+
+
+
+
+# ================================ GEOPANDAS ================================ #
 #   GeoPandas block
+def enableGeoPandas () :
+    import sys
+    if sys.prefix[sys.prefix.rindex('\\')+1:] == 'geoSpyder' :
+        sys.path.append('C:\\Users\\conlon\\Anaconda3\\Lib')
+    #   endif
+####
 try : from geopandas import GeoDataFrame
 except ImportError : pass
 else :
@@ -807,9 +1015,9 @@ else :
     ####
     def get_counties () :
         strDir = 'C:/Users/conlon/Anaconda3/Lib'
-        dfCounties = DataFrame()
+        dfCounties = pd.DataFrame()
         
-        dfCounties = read_csv(strDir+'/mapCounties.csv')
+        dfCounties = pd.read_csv(strDir+'/mapCounties.csv')
         dfCounties['geometry'] = dfCounties['geometry'].apply(wkt.loads)
         
         return dfCounties
@@ -820,15 +1028,15 @@ else :
         #   Set default colorFont, pointLabel, colorFill
         
         #   Create state boundaries in geodf
-        dfStates = DataFrame()
+        dfStates = pd.DataFrame()
         for state in list(dfCounties['abrState'][dfCounties['abrState'].notnull()].unique()) :
-            dfStates = concat([dfStates,
-                               DataFrame({'abrState':[state],
-                                          'geometry':[cascaded_union(dfCounties['geometry'][dfCounties['abrState']==state])]
-                                          }
-                                         )
-                               ]
-                              )
+            dfStates = pd.concat([dfStates,
+                                 pd.DataFrame({'abrState':[state],
+                                               'geometry':[cascaded_union(dfCounties['geometry'][dfCounties['abrState']==state])]
+                                               }
+                                              )
+                                  ]
+                                 )
         #   end for
         mask = list(set(dfCounties.columns).intersection(['abrState','state']))
         dfStates = dfStates.merge(dfCounties[mask],
@@ -967,10 +1175,10 @@ else :
         #   endfor
         
         #   Create state boundaries in geodf
-        dfRegion = DataFrame()
+        dfRegion = pd.DataFrame()
         for region in list(dfStates['region'][dfStates['region'].notnull()].unique()) :
-            dfRegion = concat([dfRegion,
-                               DataFrame({'region':[region],
+            dfRegion = pd.concat([dfRegion,
+                               pd.DataFrame({'region':[region],
                                           'geometry':[cascaded_union(dfStates['geometry'][dfStates['region']==region])]
                                           }
                                          )
@@ -996,6 +1204,7 @@ else :
         return dfRegion
     ####
 #   end GeoPandas block
+
 # =========================================================================== #
 
 
