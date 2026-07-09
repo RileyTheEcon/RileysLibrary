@@ -12,5 +12,5 @@ pip install git+https://github.com/RileyTheEcon/RileysLibrary.git
 ## How to update
 ```bash
 :: Run in Anaconda CLI with project env active
-pip install --upgrade --force-reinstall --no-deps git+https://github.com/RileyTheEcon/RileyLibrary.git
+pip install --upgrade --force-reinstall --no-deps git+https://github.com/RileyTheEcon/RileysLibrary.git
 ```
